@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#174f63" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="账目检查" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <title>每日账目 Paste 检查器</title>
+  <style>
+    :root {
+      --ink: #17212b;
+      --muted: #667085;
+      --line: #d8e0e8;
+      --blue: #174f63;
+      --soft: #eef6f8;
+      --yellow: #fff5cc;
+      --red: #ffe2dc;
+      --green: #e5f6df;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, "Microsoft YaHei", sans-serif;
+      color: var(--ink);
+      background: #f6f8fa;
+    }
+    header {
+      background: var(--blue);
+      color: white;
+      padding: 14px 16px;
+      font-weight: 700;
+      font-size: 18px;
+    }
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+    }
+    .panel {
+      background: white;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .panel h2 {
+      margin: 0;
+      padding: 10px 12px;
+      background: var(--soft);
+      font-size: 15px;
+      border-bottom: 1px solid var(--line);
+    }
+    .pad { padding: 12px; }
+    textarea {
+      width: 100%;
+      min-height: 300px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+      font-family: Consolas, monospace;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+    button {
+      border: 0;
+      border-radius: 6px;
+      background: var(--blue);
+      color: white;
+      padding: 10px 14px;
+      font-weight: 700;
+      cursor: pointer;
+      margin: 8px 8px 0 0;
+    }
+    button.secondary { background: #475467; }
+    .app-note {
+      background: #fff5cc;
+      border: 1px solid #ead27a;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: white;
+    }
+    .label { color: var(--muted); font-size: 12px; }
+    .value { font-weight: 800; font-size: 20px; margin-top: 4px; }
+    .ok { background: var(--green); }
+    .bad { background: var(--red); }
+    .warn { background: var(--yellow); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 7px 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: var(--soft); }
+    .num { text-align: right; font-variant-numeric: tabular-nums; }
+    .report {
+      min-height: 220px;
+      white-space: pre-wrap;
+    }
+    .filters {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    input {
+      width: 100%;
+      padding: 9px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      font-size: 14px;
+    }
+    @media (max-width: 760px) {
+      .grid, .filters { grid-template-columns: 1fr; }
+      table { font-size: 12px; }
+      th, td { padding: 6px; }
+    }
+  </style>
+</head>
+<body>
+  <header>每日账目 Paste 检查器</header>
+  <main>
+    <div class="app-note">
+      手机用法：把每日账目整段 paste 进去，按「自动检查」。在手机浏览器菜单选择「添加到主屏幕」，以后可以像 App 一样打开。
+    </div>
+
+    <section class="panel">
+      <h2>1. 直接 paste 原本账目</h2>
+      <div class="pad">
+        <textarea id="raw"></textarea>
+        <button id="analyze">自动检查</button>
+        <button class="secondary" id="sample">放入示例</button>
+      </div>
+    </section>
+
+    <section class="grid" id="summaryCards"></section>
+
+    <section class="panel">
+      <h2>错误 / 提醒</h2>
+      <div class="pad" id="issues"></div>
+    </section>
+
+    <section class="panel">
+      <h2>户口检查</h2>
+      <div class="pad"><div id="accounts"></div></div>
+    </section>
+
+    <section class="panel">
+      <h2>员工 QA-QO 总结</h2>
+      <div class="pad"><div id="staff"></div></div>
+    </section>
+
+    <section class="panel">
+      <h2>搜索查账</h2>
+      <div class="pad">
+        <div class="filters">
+          <input id="fCode" placeholder="员工代码，例如 QC / QL / QI" />
+          <input id="fAmount" placeholder="金额，例如 500" />
+          <input id="fText" placeholder="职业/说明，例如 餐饮 / Atm" />
+        </div>
+        <div id="searchResults"></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Cash in hand 检查</h2>
+      <div class="pad" id="cash"></div>
+    </section>
+
+    <section class="panel">
+      <h2>发总公司格式</h2>
+      <div class="pad">
+        <button id="copyReport">复制报告</button>
+        <textarea class="report" id="report"></textarea>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const staffCodes = "ABCDEFGHIJKLMNO".split("").map(ch => "Q" + ch);
+    let last = null;
+
+    const sampleText = `1/7/26
+Demo Account(MBB/人头)
+1000
++500 餐饮 QA
+-200 Atm
+=1300
+
+----------------------------------------
+
+Demo User(CIMB/鬼/QC)
+2000
++800 老师 QAB
+-300 出账 QC
+=2500
+
+----------------------------------------
+
+TOTAL:3800
+
+----------------------------------------
+
+QC Cash In Hand
+5000
++200 Atm
+-100 租金 QA
+TOTAL:5100`;
+
+    function parseNumber(s) {
+      if (s == null) return null;
+      const cleaned = String(s).replace(/,/g, "").match(/-?\d+(?:\.\d+)?/);
+      return cleaned ? Number(cleaned[0]) : null;
+    }
+    function fmt(n) {
+      if (n == null || Number.isNaN(n)) return "";
+      return Math.abs(n % 1) > 0 ? n.toFixed(2) : String(Math.round(n));
+    }
+    function money(n) {
+      return Number(n || 0).toLocaleString("en-US", { maximumFractionDigits: 2 });
+    }
+    function codeLetters(raw) {
+      if (!raw) return [];
+      const s = raw.toUpperCase();
+      const found = [];
+      for (const match of s.matchAll(/Q([A-O]+)/g)) {
+        for (const ch of match[1]) if (!found.includes(ch)) found.push(ch);
+      }
+      return found;
+    }
+    function findCode(text) {
+      const matches = [...String(text || "").toUpperCase().matchAll(/Q[A-O]+/g)];
+      return matches.length ? matches[matches.length - 1][0] : "";
+    }
+    function stripCode(desc, code) {
+      if (!code) return desc.trim();
+      return desc.replace(new RegExp(code + "\\s*$", "i"), "").trim();
+    }
+    function normalizeLines(text) {
+      return text
+        .replace(/\r/g, "")
+        .split("\n")
+        .map(x => x.trim())
+        .filter(x => x.length);
+    }
+    function splitBlocks(lines) {
+      const blocks = [];
+      let cur = [];
+      for (const line of lines) {
+        if (/^-{5,}$/.test(line)) {
+          if (cur.length) blocks.push(cur);
+          cur = [];
+        } else {
+          cur.push(line);
+        }
+      }
+      if (cur.length) blocks.push(cur);
+      return blocks;
+    }
+    function parseTx(line) {
+      const m = line.match(/^([+-])\s*([\d,]+(?:\.\d+)?)\s*(.*)$/);
+      if (!m) return null;
+      const amount = parseNumber(m[2]) * (m[1] === "-" ? -1 : 1);
+      const rawDesc = m[3].trim();
+      const code = findCode(rawDesc);
+      const desc = stripCode(rawDesc, code);
+      return { amount, desc, codeRaw: code, letters: codeLetters(code), line };
+    }
+    function parse(text) {
+      const lines = normalizeLines(text);
+      const firstDate = lines.find(x => /\d{1,2}\/\d{1,2}\/\d{2,4}/.test(x)) || "";
+      const totalLine = lines.find(x => /^TOTAL\s*:/i.test(x) && !/cash/i.test(x));
+      const statedTotal = totalLine ? parseNumber(totalLine) : null;
+      const blocks = splitBlocks(lines.filter(x => !/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(x)));
+      const accounts = [];
+      let cash = null;
+
+      for (const block of blocks) {
+        if (!block.length) continue;
+        const isCash = /cash\s*in\s*hand/i.test(block[0]) || block.some(x => /^TOTAL\s*:/i.test(x));
+        if (isCash && /cash\s*in\s*hand/i.test(block[0])) {
+          const opening = parseNumber(block[1]);
+          const txs = [];
+          let stated = null;
+          for (const line of block.slice(2)) {
+            if (/^TOTAL\s*:/i.test(line)) stated = parseNumber(line);
+            else {
+              const tx = parseTx(line);
+              if (tx) txs.push(tx);
+            }
+          }
+          cash = { title: block[0], opening, txs, stated };
+          continue;
+        }
+        if (/^TOTAL\s*:/i.test(block[0])) continue;
+
+        const title = block[0];
+        const opening = parseNumber(block[1]);
+        if (!title || opening == null) continue;
+        const txs = [];
+        let stated = null;
+        for (const line of block.slice(2)) {
+          if (/^=/.test(line)) stated = parseNumber(line);
+          else {
+            const tx = parseTx(line);
+            if (tx) txs.push(tx);
+          }
+        }
+        accounts.push({ title, opening, txs, stated });
+      }
+
+      for (const acc of accounts) {
+        acc.calculated = acc.opening + acc.txs.reduce((a, t) => a + t.amount, 0);
+        acc.diff = (acc.stated ?? 0) - acc.calculated;
+      }
+      if (cash) {
+        cash.calculated = cash.opening + cash.txs.reduce((a, t) => a + t.amount, 0);
+        cash.diff = (cash.stated ?? 0) - cash.calculated;
+      }
+
+      const staff = Object.fromEntries(staffCodes.map(c => [c, { in: 0, out: 0, inCount: 0, outCount: 0 }]));
+      const allTx = [];
+      let atmFromAccounts = 0;
+      for (const acc of accounts) {
+        for (const tx of acc.txs) {
+          allTx.push({ account: acc.title, ...tx });
+          if (tx.amount < 0 && /atm/i.test(tx.desc)) atmFromAccounts += Math.abs(tx.amount);
+          if (tx.letters.length) {
+            const share = Math.abs(tx.amount) / tx.letters.length;
+            for (const ch of tx.letters) {
+              const key = "Q" + ch;
+              if (!staff[key]) continue;
+              if (tx.amount > 0) {
+                staff[key].in += share;
+                staff[key].inCount += 1;
+              } else {
+                staff[key].out += share;
+                staff[key].outCount += 1;
+              }
+            }
+          }
+        }
+      }
+
+      const issues = [];
+      for (const acc of accounts) {
+        if (acc.stated == null) issues.push({ type: "warn", text: `${acc.title} 没有写 = 剩下金额` });
+        else if (Math.abs(acc.diff) > 0.001) issues.push({ type: "bad", text: `${acc.title} 算错：自动 ${fmt(acc.calculated)}，你写 ${fmt(acc.stated)}，差额 ${fmt(acc.diff)}` });
+        for (const tx of acc.txs) {
+          if (tx.amount > 0 && !tx.codeRaw) issues.push({ type: "warn", text: `${acc.title} 的进钱 ${fmt(tx.amount)} ${tx.desc} 没写员工代码` });
+        }
+      }
+      const accountTotal = accounts.reduce((a, x) => a + (x.stated ?? 0), 0);
+      if (statedTotal != null && Math.abs(statedTotal - accountTotal) > 0.001) {
+        issues.push({ type: "bad", text: `TOTAL 不对：户口合计 ${fmt(accountTotal)}，你写 ${fmt(statedTotal)}，差额 ${fmt(statedTotal - accountTotal)}` });
+      }
+      if (cash) {
+        if (cash.stated == null) issues.push({ type: "warn", text: `Cash in hand 没有写 TOTAL` });
+        else if (Math.abs(cash.diff) > 0.001) issues.push({ type: "bad", text: `Cash in hand 算错：自动 ${fmt(cash.calculated)}，你写 ${fmt(cash.stated)}，差额 ${fmt(cash.diff)}` });
+        const cashPositive = cash.txs.filter(t => t.amount > 0).reduce((a, t) => a + t.amount, 0);
+        if (atmFromAccounts && Math.abs(atmFromAccounts - cashPositive) > 0.001) {
+          issues.push({ type: "warn", text: `ATM 提现合计 ${fmt(atmFromAccounts)}，Cash 正数收入合计 ${fmt(cashPositive)}，请确认有没有漏写现金入账` });
+        }
+      } else if (atmFromAccounts) {
+        issues.push({ type: "warn", text: `有 ATM 提现 ${fmt(atmFromAccounts)}，但没有找到 Cash in hand 区块` });
+      }
+      if (!issues.length) issues.push({ type: "ok", text: "目前没有发现算错或漏写提醒" });
+
+      return { date: firstDate, accounts, cash, statedTotal, accountTotal, staff, allTx, atmFromAccounts, issues };
+    }
+
+    function table(headers, rows) {
+      return `<table><thead><tr>${headers.map(h => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>`;
+    }
+    function render(data) {
+      last = data;
+      document.getElementById("summaryCards").innerHTML = [
+        ["户口合计", money(data.accountTotal), "ok"],
+        ["你写 TOTAL", data.statedTotal == null ? "没有" : money(data.statedTotal), data.statedTotal == null || Math.abs(data.statedTotal - data.accountTotal) < 0.001 ? "ok" : "bad"],
+        ["ATM 提现", money(data.atmFromAccounts), "ok"],
+        ["Cash 剩下", data.cash ? money(data.cash.stated) : "没有", data.cash && Math.abs(data.cash.diff) < 0.001 ? "ok" : "bad"],
+      ].map(([label, value, cls]) => `<div class="card ${cls}"><div class="label">${label}</div><div class="value">${value}</div></div>`).join("");
+
+      document.getElementById("issues").innerHTML = data.issues.map(x => `<div class="card ${x.type}">${x.text}</div>`).join("");
+
+      document.getElementById("accounts").innerHTML = table(
+        ["户口", "昨天", "进钱", "出钱", "自动剩下", "你写", "差额", "检查"],
+        data.accounts.map(acc => {
+          const inAmt = acc.txs.filter(t => t.amount > 0).reduce((a, t) => a + t.amount, 0);
+          const outAmt = -acc.txs.filter(t => t.amount < 0).reduce((a, t) => a + t.amount, 0);
+          const ok = Math.abs(acc.diff) < 0.001;
+          return `<tr class="${ok ? "" : "bad"}"><td>${acc.title}</td><td class="num">${money(acc.opening)}</td><td class="num">${money(inAmt)}</td><td class="num">${money(outAmt)}</td><td class="num">${money(acc.calculated)}</td><td class="num">${money(acc.stated)}</td><td class="num">${money(acc.diff)}</td><td>${ok ? "OK" : "错误"}</td></tr>`;
+        })
+      );
+
+      document.getElementById("staff").innerHTML = table(
+        ["代码", "进钱", "出钱", "净额", "进钱笔数", "出钱笔数"],
+        staffCodes.map(code => {
+          const s = data.staff[code];
+          return `<tr><td>${code}</td><td class="num">${money(s.in)}</td><td class="num">${money(s.out)}</td><td class="num">${money(s.in - s.out)}</td><td class="num">${s.inCount}</td><td class="num">${s.outCount}</td></tr>`;
+        })
+      );
+
+      renderSearch();
+
+      if (data.cash) {
+        document.getElementById("cash").innerHTML = table(
+          ["项目", "金额"],
+          [
+            `<tr><td>昨天现金</td><td class="num">${money(data.cash.opening)}</td></tr>`,
+            ...data.cash.txs.map(t => `<tr><td>${t.desc} ${t.codeRaw}</td><td class="num">${money(t.amount)}</td></tr>`),
+            `<tr><td>自动剩下</td><td class="num">${money(data.cash.calculated)}</td></tr>`,
+            `<tr class="${Math.abs(data.cash.diff) < 0.001 ? "" : "bad"}"><td>你写 TOTAL</td><td class="num">${money(data.cash.stated)}</td></tr>`,
+          ]
+        );
+      } else {
+        document.getElementById("cash").innerHTML = `<div class="card warn">没有找到 Cash in hand 区块</div>`;
+      }
+
+      document.getElementById("report").value = buildReport(data);
+    }
+    function renderSearch() {
+      if (!last) return;
+      const code = document.getElementById("fCode").value.trim().toUpperCase();
+      const amount = parseNumber(document.getElementById("fAmount").value);
+      const text = document.getElementById("fText").value.trim().toLowerCase();
+      const rows = last.allTx.filter(t => {
+        const codeOk = !code || t.letters.includes(code.replace(/^Q/, ""));
+        const amountOk = amount == null || Math.abs(t.amount) === Math.abs(amount);
+        const textOk = !text || `${t.desc} ${t.account} ${t.codeRaw}`.toLowerCase().includes(text);
+        return codeOk && amountOk && textOk;
+      });
+      document.getElementById("searchResults").innerHTML = table(
+        ["户口", "金额", "说明", "代码", "平分到"],
+        rows.map(t => `<tr><td>${t.account}</td><td class="num">${money(t.amount)}</td><td>${t.desc}</td><td>${t.codeRaw}</td><td>${t.letters.map(x => "Q" + x).join(", ")}</td></tr>`)
+      );
+    }
+    function buildReport(data) {
+      const out = [];
+      if (data.date) out.push(data.date);
+      for (const acc of data.accounts) {
+        out.push(acc.title);
+        out.push(fmt(acc.opening));
+        for (const t of acc.txs) out.push(`${t.amount > 0 ? "+" : ""}${fmt(t.amount)} ${t.desc}${t.codeRaw ? " " + t.codeRaw : ""}`.trim());
+        out.push("=" + fmt(acc.stated));
+        out.push("----------------------------------------");
+      }
+      out.push("TOTAL:" + fmt(data.accountTotal));
+      out.push("----------------------------------------");
+      if (data.cash) {
+        out.push("QC Cash In Hand");
+        out.push(fmt(data.cash.opening));
+        for (const t of data.cash.txs) out.push(`${t.amount > 0 ? "+" : ""}${fmt(t.amount)} ${t.desc}${t.codeRaw ? " " + t.codeRaw : ""}`.trim());
+        out.push("TOTAL:" + fmt(data.cash.stated));
+      }
+      return out.join("\n");
+    }
+
+    document.getElementById("analyze").onclick = () => render(parse(document.getElementById("raw").value));
+    document.getElementById("sample").onclick = () => { document.getElementById("raw").value = sampleText; render(parse(sampleText)); };
+    document.getElementById("copyReport").onclick = async () => {
+      await navigator.clipboard.writeText(document.getElementById("report").value);
+      alert("已复制");
+    };
+    ["fCode", "fAmount", "fText"].forEach(id => document.getElementById(id).addEventListener("input", renderSearch));
+    document.getElementById("raw").value = sampleText;
+    render(parse(sampleText));
+
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("./service-worker.js").catch(() => {});
+      });
+    }
+  </script>
+</body>
+</html>
