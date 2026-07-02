@@ -328,6 +328,9 @@ TOTAL:4900`;
     function norm(s) {
       return String(s || "").toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "");
     }
+    function looseNorm(s) {
+      return norm(s).replace(/(.)\1+/g, "$1");
+    }
 
     function parseNumber(s) {
       if (s == null) return null;
@@ -361,6 +364,10 @@ TOTAL:4900`;
     function baseName(title) {
       return String(title || "").split("(")[0].trim();
     }
+    function parenText(title) {
+      const m = String(title || "").match(/\(([^)]*)\)/);
+      return m ? m[1] : "";
+    }
     function parenPart(title) {
       const m = String(title || "").match(/\([^)]*\)/);
       return m ? m[0] : "";
@@ -375,21 +382,41 @@ TOTAL:4900`;
       const refBase = baseName(ref);
       const refNorm = norm(ref);
       const refBaseNorm = norm(refBase);
+      const refLoose = looseNorm(refBase);
+      const refMeta = norm(parenText(ref));
       const aliasHit = aliases.find(x => norm(x.alias) === refBaseNorm || norm(x.alias) === refNorm);
       if (aliasHit) {
         const byAliasTitle = accounts.find(acc => norm(acc.title).includes(norm(aliasHit.title)) || norm(baseName(acc.title)).includes(norm(aliasHit.title)));
         if (byAliasTitle) return byAliasTitle;
       }
-      return accounts.find(acc => {
+      let best = null;
+      let bestScore = 0;
+      for (const acc of accounts) {
         const titleNorm = norm(acc.title);
         const baseNorm = norm(baseName(acc.title));
+        const baseLoose = looseNorm(baseName(acc.title));
+        const metaNorm = norm(parenText(acc.title));
         const words = baseName(acc.title).split(/\s+/).map(norm).filter(Boolean);
-        return titleNorm.includes(refNorm) || refNorm.includes(titleNorm) || baseNorm.includes(refBaseNorm) || words.includes(refBaseNorm);
-      }) || null;
+        let score = 0;
+        if (titleNorm.includes(refNorm) || refNorm.includes(titleNorm)) score += 8;
+        if (baseNorm.includes(refBaseNorm) || refBaseNorm.includes(baseNorm)) score += 6;
+        if (baseLoose.includes(refLoose) || refLoose.includes(baseLoose)) score += 5;
+        if (words.includes(refBaseNorm) || words.includes(refLoose)) score += 4;
+        if (refMeta && metaNorm && (metaNorm.includes(refMeta) || refMeta.includes(metaNorm))) score += 3;
+        if (score > bestScore) {
+          best = acc;
+          bestScore = score;
+        }
+      }
+      return bestScore >= 4 ? best : null;
     }
     function hasManualTransferIn(dest, amount, sourceRef) {
-      const sourceBase = norm(baseName(sourceRef));
-      return dest.txs.some(t => t.amount > 0 && Math.abs(t.amount - amount) < 0.001 && norm(t.desc).includes(sourceBase));
+      const keywords = accountKeywords(sourceRef);
+      return dest.txs.some(t => {
+        if (t.amount <= 0 || Math.abs(t.amount - amount) > 0.001) return false;
+        const desc = norm(t.desc);
+        return keywords.some(k => desc.includes(k));
+      });
     }
     function applyTransfers(accounts, issues, aliases) {
       for (const source of accounts) {
@@ -402,7 +429,7 @@ TOTAL:4900`;
           }
           const amount = Math.abs(tx.amount);
           const sourceRef = displayRef(source.title, aliases);
-          if (hasManualTransferIn(dest, amount, sourceRef)) continue;
+          if (hasManualTransferIn(dest, amount, `${source.title} ${sourceRef}`)) continue;
           dest.txs.push({
             amount,
             desc: sourceRef,
@@ -418,9 +445,41 @@ TOTAL:4900`;
     function normalizeLines(text) {
       return text
         .replace(/\r/g, "")
+        .replace(/\uFF08/g, "(")
+        .replace(/\uFF09/g, ")")
         .split("\n")
         .map(x => x.trim())
         .filter(x => x.length);
+    }
+    function isSummaryLine(line) {
+      return /^(acc(?:ount)?\s*total|cash\s*total|totally)\s*=/i.test(line) || /^TOTAL\s*:/i.test(line);
+    }
+    function summaryNumber(lines, pattern) {
+      const line = lines.find(x => pattern.test(x));
+      return line ? parseNumber(line) : null;
+    }
+    function hasAccountRef(text) {
+      return /\([^)]*(mbb|rhb|cimb|hlb|affin|bank|鬼|人头)[^)]*\)/i.test(text);
+    }
+    function accountKeywords(title) {
+      const base = baseName(title);
+      const words = base.split(/\s+/).map(x => norm(x)).filter(x => x.length >= 3);
+      const compact = norm(base);
+      if (compact.length >= 3) words.push(compact);
+      for (const word of [...words]) {
+        if (word.length >= 6) words.push(word.slice(-6));
+        if (word.length >= 7) words.push(word.slice(-7));
+      }
+      return [...new Set(words)];
+    }
+    function cashHasAtmEntry(cash, amount, accountTitle) {
+      if (!cash) return false;
+      const keywords = accountKeywords(accountTitle);
+      return cash.txs.some(t => {
+        if (t.amount <= 0 || Math.abs(t.amount - amount) > 0.001 || !/atm/i.test(t.desc)) return false;
+        const desc = norm(t.desc);
+        return keywords.some(k => desc.includes(k));
+      });
     }
     function splitBlocks(lines) {
       const blocks = [];
@@ -441,8 +500,11 @@ TOTAL:4900`;
       if (!m) return null;
       const amount = parseNumber(m[2]) * (m[1] === "-" ? -1 : 1);
       const rawDesc = m[3].trim();
-      if (amount < 0 && /\([^)]*\/Q[A-Z]+\)/i.test(rawDesc)) {
+      if (amount < 0 && hasAccountRef(rawDesc)) {
         return { amount, desc: rawDesc, codeRaw: "", letters: [], line, transferRef: rawDesc };
+      }
+      if (amount > 0 && hasAccountRef(rawDesc) && !findCode(rawDesc)) {
+        return { amount, desc: rawDesc, codeRaw: "", letters: [], line, internalTransfer: true };
       }
       const code = findCode(rawDesc);
       const desc = stripCode(rawDesc, code);
@@ -462,7 +524,7 @@ TOTAL:4900`;
         if (tx.amount > 0) {
           staff[key].in += share;
           staff[key].inCount += 1;
-        } else if (/出账/i.test(tx.desc)) {
+        } else if (/\u51FA[\u8D26\u5E10\u5E33]/i.test(tx.desc)) {
           staff[key].payout += share;
           staff[key].payoutCount += 1;
         } else {
@@ -474,8 +536,9 @@ TOTAL:4900`;
     function parse(text) {
       const lines = normalizeLines(text);
       const firstDate = lines.find(x => /\d{1,2}\/\d{1,2}\/\d{2,4}/.test(x)) || "";
-      const totalLine = lines.find(x => /^TOTAL\s*:/i.test(x) && !/cash/i.test(x));
-      const statedTotal = totalLine ? parseNumber(totalLine) : null;
+      const statedTotal = summaryNumber(lines, /^(acc(?:ount)?\s*total\s*=|TOTAL\s*:)/i);
+      const statedCashTotal = summaryNumber(lines, /^cash\s*total\s*=/i);
+      const statedGrandTotal = summaryNumber(lines, /^totally\s*=/i);
       const blocks = splitBlocks(lines.filter(x => !/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(x)));
       const accounts = [];
       let cash = null;
@@ -488,7 +551,8 @@ TOTAL:4900`;
           const txs = [];
           let stated = null;
           for (const line of block.slice(2)) {
-            if (/^TOTAL\s*:/i.test(line)) stated = parseNumber(line);
+            if (/^(TOTAL\s*:|cash\s*total\s*=)/i.test(line)) stated = parseNumber(line);
+            else if (/^totally\s*=/i.test(line)) continue;
             else {
               const tx = parseTx(line);
               if (tx) txs.push(tx);
@@ -506,6 +570,7 @@ TOTAL:4900`;
         let stated = null;
         for (const line of block.slice(2)) {
           if (/^=/.test(line)) stated = parseNumber(line);
+          else if (isSummaryLine(line)) continue;
           else {
             const tx = parseTx(line);
             if (tx) txs.push(tx);
@@ -523,8 +588,11 @@ TOTAL:4900`;
         acc.diff = (acc.stated ?? 0) - acc.calculated;
       }
       if (cash) {
+        if (cash.stated == null && statedCashTotal != null) {
+          cash.stated = statedCashTotal;
+        }
         cash.calculated = cash.opening + cash.txs.reduce((a, t) => a + t.amount, 0);
-        cash.diff = (cash.stated ?? 0) - cash.calculated;
+        cash.diff = cash.stated == null ? 0 : cash.stated - cash.calculated;
       }
 
       const staffLetters = parseStaffLetters(settings.staffLetters);
@@ -536,10 +604,15 @@ TOTAL:4900`;
       const staff = Object.fromEntries(staffCodes.map(c => [c, { in: 0, payout: 0, expense: 0, inCount: 0, payoutCount: 0, expenseCount: 0 }]));
       const allTx = [];
       let atmFromAccounts = 0;
+      const atmWithdrawals = [];
       for (const acc of accounts) {
         for (const tx of acc.txs) {
           allTx.push({ account: acc.title, ...tx });
-          if (tx.amount < 0 && /atm/i.test(tx.desc)) atmFromAccounts += Math.abs(tx.amount);
+          if (tx.amount < 0 && /atm/i.test(tx.desc)) {
+            const amount = Math.abs(tx.amount);
+            atmFromAccounts += amount;
+            atmWithdrawals.push({ account: acc.title, amount });
+          }
           addTxToStaff(staff, tx);
         }
       }
@@ -554,7 +627,7 @@ TOTAL:4900`;
         if (acc.stated == null) issues.push({ type: "warn", text: `${acc.title} 没有写 = 剩下金额` });
         else if (Math.abs(acc.diff) > 0.001) issues.push({ type: "bad", text: `${acc.title} 算错：自动 ${fmt(acc.calculated)}，你写 ${fmt(acc.stated)}，差额 ${fmt(acc.diff)}` });
         for (const tx of acc.txs) {
-          if (tx.amount > 0 && !tx.codeRaw && !tx.synthetic) issues.push({ type: "warn", text: `${acc.title} 的进钱 ${fmt(tx.amount)} ${tx.desc} 没写员工代码` });
+          if (tx.amount > 0 && !tx.codeRaw && !tx.synthetic && !tx.internalTransfer) issues.push({ type: "warn", text: `${acc.title} 的进钱 ${fmt(tx.amount)} ${tx.desc} 没写员工代码` });
         }
       }
       const accountTotal = accounts.reduce((a, x) => a + (x.stated ?? 0), 0);
@@ -562,18 +635,27 @@ TOTAL:4900`;
         issues.push({ type: "bad", text: `TOTAL 不对：户口合计 ${fmt(accountTotal)}，你写 ${fmt(statedTotal)}，差额 ${fmt(statedTotal - accountTotal)}` });
       }
       if (cash) {
-        if (cash.stated == null) issues.push({ type: "warn", text: `Cash in hand 没有写 TOTAL` });
-        else if (Math.abs(cash.diff) > 0.001) issues.push({ type: "bad", text: `Cash in hand 算错：自动 ${fmt(cash.calculated)}，你写 ${fmt(cash.stated)}，差额 ${fmt(cash.diff)}` });
+        if (cash.stated != null && Math.abs(cash.diff) > 0.001) issues.push({ type: "bad", text: `Cash in hand 算错：自动 ${fmt(cash.calculated)}，你写 ${fmt(cash.stated)}，差额 ${fmt(cash.diff)}` });
         const cashPositive = cash.txs.filter(t => t.amount > 0).reduce((a, t) => a + t.amount, 0);
         if (atmFromAccounts && Math.abs(atmFromAccounts - cashPositive) > 0.001) {
           issues.push({ type: "warn", text: `ATM 提现合计 ${fmt(atmFromAccounts)}，Cash 正数收入合计 ${fmt(cashPositive)}，请确认有没有漏写现金入账` });
         }
+        for (const atm of atmWithdrawals) {
+          if (!cashHasAtmEntry(cash, atm.amount, atm.account)) {
+            issues.push({ type: "warn", text: `ATM 现金记录可能漏户口名：${atm.account} 提现 ${fmt(atm.amount)}，Cash 应写 +${fmt(atm.amount)} 户口名 Atm` });
+          }
+        }
       } else if (atmFromAccounts) {
         issues.push({ type: "warn", text: `有 ATM 提现 ${fmt(atmFromAccounts)}，但没有找到 Cash in hand 区块` });
       }
+      const cashTotal = cash ? (cash.stated ?? cash.calculated) : 0;
+      const grandTotal = accountTotal + cashTotal;
+      if (statedGrandTotal != null && Math.abs(statedGrandTotal - grandTotal) > 0.001) {
+        issues.push({ type: "bad", text: `Totally 不对：Acc + Cash = ${fmt(grandTotal)}，你写 ${fmt(statedGrandTotal)}，差额 ${fmt(statedGrandTotal - grandTotal)}` });
+      }
       if (!issues.length) issues.push({ type: "ok", text: "目前没有发现算错或漏写提醒" });
 
-      return { date: firstDate, accounts, cash, statedTotal, accountTotal, staff, allTx, atmFromAccounts, issues };
+      return { date: firstDate, accounts, cash, statedTotal, statedCashTotal, statedGrandTotal, accountTotal, cashTotal, grandTotal, staff, allTx, atmFromAccounts, issues };
     }
 
     function table(headers, rows) {
@@ -582,10 +664,10 @@ TOTAL:4900`;
     function render(data) {
       last = data;
       document.getElementById("summaryCards").innerHTML = [
-        ["户口合计", money(data.accountTotal), "ok"],
-        ["你写 TOTAL", data.statedTotal == null ? "没有" : money(data.statedTotal), data.statedTotal == null || Math.abs(data.statedTotal - data.accountTotal) < 0.001 ? "ok" : "bad"],
+        ["Acc Total", money(data.accountTotal), data.statedTotal == null || Math.abs(data.statedTotal - data.accountTotal) < 0.001 ? "ok" : "bad"],
+        ["Cash Total", data.cash ? money(data.cashTotal) : "没有", data.cash && Math.abs((data.cash.stated ?? data.cash.calculated) - data.cash.calculated) < 0.001 ? "ok" : "bad"],
+        ["Totally", money(data.grandTotal), data.statedGrandTotal == null || Math.abs(data.statedGrandTotal - data.grandTotal) < 0.001 ? "ok" : "bad"],
         ["ATM 提现", money(data.atmFromAccounts), "ok"],
-        ["Cash 剩下", data.cash ? money(data.cash.stated) : "没有", data.cash && Math.abs(data.cash.diff) < 0.001 ? "ok" : "bad"],
       ].map(([label, value, cls]) => `<div class="card ${cls}"><div class="label">${label}</div><div class="value">${value}</div></div>`).join("");
 
       document.getElementById("issues").innerHTML = data.issues.map(x => `<div class="card ${x.type}">${x.text}</div>`).join("");
@@ -617,7 +699,7 @@ TOTAL:4900`;
             `<tr><td>昨天现金</td><td class="num">${money(data.cash.opening)}</td></tr>`,
             ...data.cash.txs.map(t => `<tr><td>${t.desc} ${t.codeRaw}</td><td class="num">${money(t.amount)}</td></tr>`),
             `<tr><td>自动剩下</td><td class="num">${money(data.cash.calculated)}</td></tr>`,
-            `<tr class="${Math.abs(data.cash.diff) < 0.001 ? "" : "bad"}"><td>你写 TOTAL</td><td class="num">${money(data.cash.stated)}</td></tr>`,
+            `<tr class="${Math.abs(data.cash.diff) < 0.001 ? "" : "bad"}"><td>Cash Total</td><td class="num">${money(data.cash.stated ?? data.cash.calculated)}</td></tr>`,
           ]
         );
       } else {
@@ -652,13 +734,15 @@ TOTAL:4900`;
         out.push("=" + fmt(acc.stated));
         out.push("----------------------------------------");
       }
-      out.push("TOTAL:" + fmt(data.accountTotal));
+      out.push("Acc Total = " + fmt(data.accountTotal));
       out.push("----------------------------------------");
       if (data.cash) {
         out.push("QC Cash In Hand");
         out.push(fmt(data.cash.opening));
         for (const t of data.cash.txs) out.push(`${t.amount > 0 ? "+" : ""}${fmt(t.amount)} ${t.desc}${t.codeRaw ? " " + t.codeRaw : ""}`.trim());
-        out.push("TOTAL:" + fmt(data.cash.stated));
+        out.push("Cash Total = " + fmt(data.cash.stated ?? data.cash.calculated));
+        out.push("----------------------------------------");
+        out.push("Totally = " + fmt(data.grandTotal));
       }
       return out.join("\n");
     }
