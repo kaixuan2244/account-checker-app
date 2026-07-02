@@ -193,7 +193,7 @@
     </section>
 
     <section class="panel">
-      <h2>员工 QA-QO 总结</h2>
+      <h2>员工代码总结</h2>
       <div class="pad"><div id="staff"></div></div>
     </section>
 
@@ -270,8 +270,9 @@ TOTAL:4964
 QC Cash In Hand
 5000
 +1200 Atm
+-1200 车期 QC
 -100 租金 QA
-TOTAL:6100`;
+TOTAL:4900`;
 
     function loadSettings() {
       try {
@@ -446,6 +447,26 @@ TOTAL:6100`;
       const desc = stripCode(rawDesc, code);
       return { amount, desc, codeRaw: code, letters: codeLetters(code), line };
     }
+    function addStaffLettersFromTx(staffLetters, txs) {
+      for (const tx of txs) {
+        for (const ch of tx.letters) if (!staffLetters.includes(ch)) staffLetters.push(ch);
+      }
+    }
+    function addTxToStaff(staff, tx) {
+      if (tx.transferRef || tx.synthetic || !tx.letters.length) return;
+      const share = Math.abs(tx.amount) / tx.letters.length;
+      for (const ch of tx.letters) {
+        const key = "Q" + ch;
+        if (!staff[key]) continue;
+        if (tx.amount > 0) {
+          staff[key].in += share;
+          staff[key].inCount += 1;
+        } else {
+          staff[key].out += share;
+          staff[key].outCount += 1;
+        }
+      }
+    }
     function parse(text) {
       const lines = normalizeLines(text);
       const firstDate = lines.find(x => /\d{1,2}\/\d{1,2}\/\d{2,4}/.test(x)) || "";
@@ -504,10 +525,9 @@ TOTAL:6100`;
 
       const staffLetters = parseStaffLetters(settings.staffLetters);
       for (const acc of accounts) {
-        for (const tx of acc.txs) {
-          for (const ch of tx.letters) if (!staffLetters.includes(ch)) staffLetters.push(ch);
-        }
+        addStaffLettersFromTx(staffLetters, acc.txs);
       }
+      if (cash) addStaffLettersFromTx(staffLetters, cash.txs);
       staffCodes = staffLetters.map(ch => "Q" + ch);
       const staff = Object.fromEntries(staffCodes.map(c => [c, { in: 0, out: 0, inCount: 0, outCount: 0 }]));
       const allTx = [];
@@ -516,20 +536,13 @@ TOTAL:6100`;
         for (const tx of acc.txs) {
           allTx.push({ account: acc.title, ...tx });
           if (tx.amount < 0 && /atm/i.test(tx.desc)) atmFromAccounts += Math.abs(tx.amount);
-          if (!tx.transferRef && !tx.synthetic && tx.letters.length) {
-            const share = Math.abs(tx.amount) / tx.letters.length;
-            for (const ch of tx.letters) {
-              const key = "Q" + ch;
-              if (!staff[key]) continue;
-              if (tx.amount > 0) {
-                staff[key].in += share;
-                staff[key].inCount += 1;
-              } else {
-                staff[key].out += share;
-                staff[key].outCount += 1;
-              }
-            }
-          }
+          addTxToStaff(staff, tx);
+        }
+      }
+      if (cash) {
+        for (const tx of cash.txs) {
+          allTx.push({ account: cash.title, ...tx });
+          addTxToStaff(staff, tx);
         }
       }
 
