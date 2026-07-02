@@ -237,7 +237,8 @@ Demo Account(MBB/人头)
 1000
 +500 餐饮 QA
 -200 Atm
-=1300
+-100 TNG QC
+=1200
 
 ----------------------------------------
 
@@ -263,7 +264,7 @@ Demo Vivie(RHB/鬼/QC)
 
 ----------------------------------------
 
-TOTAL:4964
+TOTAL:4864
 
 ----------------------------------------
 
@@ -461,9 +462,12 @@ TOTAL:4900`;
         if (tx.amount > 0) {
           staff[key].in += share;
           staff[key].inCount += 1;
+        } else if (/出账/i.test(tx.desc)) {
+          staff[key].payout += share;
+          staff[key].payoutCount += 1;
         } else {
-          staff[key].out += share;
-          staff[key].outCount += 1;
+          staff[key].expense += share;
+          staff[key].expenseCount += 1;
         }
       }
     }
@@ -529,7 +533,7 @@ TOTAL:4900`;
       }
       if (cash) addStaffLettersFromTx(staffLetters, cash.txs);
       staffCodes = staffLetters.map(ch => "Q" + ch);
-      const staff = Object.fromEntries(staffCodes.map(c => [c, { in: 0, out: 0, inCount: 0, outCount: 0 }]));
+      const staff = Object.fromEntries(staffCodes.map(c => [c, { in: 0, payout: 0, expense: 0, inCount: 0, payoutCount: 0, expenseCount: 0 }]));
       const allTx = [];
       let atmFromAccounts = 0;
       for (const acc of accounts) {
@@ -597,10 +601,10 @@ TOTAL:4900`;
       );
 
       document.getElementById("staff").innerHTML = table(
-        ["代码", "进钱", "出钱", "净额", "进钱笔数", "出钱笔数"],
+        ["代码", "进账", "出账", "开销", "净额", "进账笔数", "出账笔数", "开销笔数"],
         staffCodes.map(code => {
-          const s = data.staff[code];
-          return `<tr><td>${code}</td><td class="num">${money(s.in)}</td><td class="num">${money(s.out)}</td><td class="num">${money(s.in - s.out)}</td><td class="num">${s.inCount}</td><td class="num">${s.outCount}</td></tr>`;
+          const ss = data.staff[code];
+          return `<tr><td>${code}</td><td class="num">${money(ss.in)}</td><td class="num">${money(ss.payout)}</td><td class="num">${money(ss.expense)}</td><td class="num">${money(ss.in - ss.payout - ss.expense)}</td><td class="num">${ss.inCount}</td><td class="num">${ss.payoutCount}</td><td class="num">${ss.expenseCount}</td></tr>`;
         })
       );
 
