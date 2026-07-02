@@ -1,4 +1,4 @@
-const CACHE_NAME = "account-checker-v6";
+const CACHE_NAME = "account-checker-v7";
 const ASSETS = [
   "./",
   "./index.html",
