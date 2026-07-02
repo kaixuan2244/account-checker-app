@@ -123,6 +123,15 @@
       gap: 8px;
       margin-bottom: 10px;
     }
+    .settings-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    textarea.small {
+      min-height: 96px;
+      font-family: Consolas, monospace;
+    }
     input {
       width: 100%;
       padding: 9px;
@@ -131,7 +140,7 @@
       font-size: 14px;
     }
     @media (max-width: 760px) {
-      .grid, .filters { grid-template-columns: 1fr; }
+      .grid, .filters, .settings-grid { grid-template-columns: 1fr; }
       table { font-size: 12px; }
       th, td { padding: 6px; }
     }
@@ -154,6 +163,24 @@
     </section>
 
     <section class="grid" id="summaryCards"></section>
+
+    <section class="panel">
+      <h2>设置</h2>
+      <div class="pad">
+        <div class="settings-grid">
+          <div>
+            <div class="label">员工代码字母</div>
+            <textarea class="small" id="staffLetters"></textarea>
+          </div>
+          <div>
+            <div class="label">户口别名：一行一个，例子 Siti Aishah=Aishah</div>
+            <textarea class="small" id="accountAliases"></textarea>
+          </div>
+        </div>
+        <button id="saveSettings">保存设置</button>
+        <button class="secondary" id="resetSettings">重置设置</button>
+      </div>
+    </section>
 
     <section class="panel">
       <h2>错误 / 提醒</h2>
@@ -197,7 +224,12 @@
   </main>
 
   <script>
-    const staffCodes = "ABCDEFGHIJKLMNO".split("").map(ch => "Q" + ch);
+    const defaultSettings = {
+      staffLetters: "A-O",
+      accountAliases: "Demo User=User\nDemo Aishah=Aishah\nDemo Vivie=Vivie"
+    };
+    let settings = loadSettings();
+    let staffCodes = [];
     let last = null;
 
     const sampleText = `1/7/26
@@ -217,15 +249,83 @@ Demo User(CIMB/鬼/QC)
 
 ----------------------------------------
 
-TOTAL:3800
+Demo Aishah(RHB/鬼/QC)
+1000
+=1164
+
+----------------------------------------
+
+Demo Vivie(RHB/鬼/QC)
+1164
+-1000 Atm
+-164 Aishah(RHB/鬼/QC)
+=0
+
+----------------------------------------
+
+TOTAL:4964
 
 ----------------------------------------
 
 QC Cash In Hand
 5000
-+200 Atm
++1200 Atm
 -100 租金 QA
-TOTAL:5100`;
+TOTAL:6100`;
+
+    function loadSettings() {
+      try {
+        return { ...defaultSettings, ...JSON.parse(localStorage.getItem("accountCheckerSettings") || "{}") };
+      } catch {
+        return { ...defaultSettings };
+      }
+    }
+    function saveSettings() {
+      settings = {
+        staffLetters: document.getElementById("staffLetters").value,
+        accountAliases: document.getElementById("accountAliases").value
+      };
+      localStorage.setItem("accountCheckerSettings", JSON.stringify(settings));
+      render(parse(document.getElementById("raw").value));
+    }
+    function renderSettings() {
+      document.getElementById("staffLetters").value = settings.staffLetters;
+      document.getElementById("accountAliases").value = settings.accountAliases;
+    }
+    function parseStaffLetters(value) {
+      const found = [];
+      const add = ch => {
+        ch = String(ch || "").trim().toUpperCase();
+        if (/^[A-Z]$/.test(ch) && !found.includes(ch)) found.push(ch);
+      };
+      for (const part of String(value || "").split(/[\s,，]+/)) {
+        if (!part) continue;
+        const range = part.match(/^([A-Z])\s*-\s*([A-Z])$/i);
+        if (range) {
+          const start = range[1].toUpperCase().charCodeAt(0);
+          const end = range[2].toUpperCase().charCodeAt(0);
+          for (let c = Math.min(start, end); c <= Math.max(start, end); c++) add(String.fromCharCode(c));
+        } else {
+          const single = part.match(/^Q?([A-Z])$/i);
+          if (single) add(single[1]);
+        }
+      }
+      return found.length ? found : "ABCDEFGHIJKLMNO".split("");
+    }
+    function parseAliases(value) {
+      const aliases = [];
+      for (const line of String(value || "").split(/\n+/)) {
+        const parts = line.split("=");
+        if (parts.length < 2) continue;
+        const title = parts[0].trim();
+        const alias = parts.slice(1).join("=").trim();
+        if (title && alias) aliases.push({ title, alias });
+      }
+      return aliases;
+    }
+    function norm(s) {
+      return String(s || "").toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "");
+    }
 
     function parseNumber(s) {
       if (s == null) return null;
@@ -243,18 +343,75 @@ TOTAL:5100`;
       if (!raw) return [];
       const s = raw.toUpperCase();
       const found = [];
-      for (const match of s.matchAll(/Q([A-O]+)/g)) {
+      for (const match of s.matchAll(/Q([A-Z]+)/g)) {
         for (const ch of match[1]) if (!found.includes(ch)) found.push(ch);
       }
       return found;
     }
     function findCode(text) {
-      const matches = [...String(text || "").toUpperCase().matchAll(/Q[A-O]+/g)];
+      const matches = [...String(text || "").toUpperCase().matchAll(/Q[A-Z]+/g)];
       return matches.length ? matches[matches.length - 1][0] : "";
     }
     function stripCode(desc, code) {
       if (!code) return desc.trim();
       return desc.replace(new RegExp(code + "\\s*$", "i"), "").trim();
+    }
+    function baseName(title) {
+      return String(title || "").split("(")[0].trim();
+    }
+    function parenPart(title) {
+      const m = String(title || "").match(/\([^)]*\)/);
+      return m ? m[0] : "";
+    }
+    function displayRef(title, aliases) {
+      const base = baseName(title);
+      const hit = aliases.find(x => norm(x.title) === norm(base) || norm(x.title) === norm(title));
+      const shortName = hit ? hit.alias : base.split(/\s+/)[0];
+      return `${shortName}${parenPart(title)}`;
+    }
+    function findAccountByRef(ref, accounts, aliases) {
+      const refBase = baseName(ref);
+      const refNorm = norm(ref);
+      const refBaseNorm = norm(refBase);
+      const aliasHit = aliases.find(x => norm(x.alias) === refBaseNorm || norm(x.alias) === refNorm);
+      if (aliasHit) {
+        const byAliasTitle = accounts.find(acc => norm(acc.title).includes(norm(aliasHit.title)) || norm(baseName(acc.title)).includes(norm(aliasHit.title)));
+        if (byAliasTitle) return byAliasTitle;
+      }
+      return accounts.find(acc => {
+        const titleNorm = norm(acc.title);
+        const baseNorm = norm(baseName(acc.title));
+        const words = baseName(acc.title).split(/\s+/).map(norm).filter(Boolean);
+        return titleNorm.includes(refNorm) || refNorm.includes(titleNorm) || baseNorm.includes(refBaseNorm) || words.includes(refBaseNorm);
+      }) || null;
+    }
+    function hasManualTransferIn(dest, amount, sourceRef) {
+      const sourceBase = norm(baseName(sourceRef));
+      return dest.txs.some(t => t.amount > 0 && Math.abs(t.amount - amount) < 0.001 && norm(t.desc).includes(sourceBase));
+    }
+    function applyTransfers(accounts, issues, aliases) {
+      for (const source of accounts) {
+        for (const tx of source.txs) {
+          if (!tx.transferRef) continue;
+          const dest = findAccountByRef(tx.transferRef, accounts, aliases);
+          if (!dest) {
+            issues.push({ type: "warn", text: `找不到转账目标户口：${tx.transferRef}，来源 ${source.title}` });
+            continue;
+          }
+          const amount = Math.abs(tx.amount);
+          const sourceRef = displayRef(source.title, aliases);
+          if (hasManualTransferIn(dest, amount, sourceRef)) continue;
+          dest.txs.push({
+            amount,
+            desc: sourceRef,
+            codeRaw: "",
+            letters: [],
+            line: `+${fmt(amount)} ${sourceRef}`,
+            synthetic: true,
+            transferFrom: source.title
+          });
+        }
+      }
     }
     function normalizeLines(text) {
       return text
@@ -282,6 +439,9 @@ TOTAL:5100`;
       if (!m) return null;
       const amount = parseNumber(m[2]) * (m[1] === "-" ? -1 : 1);
       const rawDesc = m[3].trim();
+      if (amount < 0 && /\([^)]*\/Q[A-Z]+\)/i.test(rawDesc)) {
+        return { amount, desc: rawDesc, codeRaw: "", letters: [], line, transferRef: rawDesc };
+      }
       const code = findCode(rawDesc);
       const desc = stripCode(rawDesc, code);
       return { amount, desc, codeRaw: code, letters: codeLetters(code), line };
@@ -329,6 +489,10 @@ TOTAL:5100`;
         accounts.push({ title, opening, txs, stated });
       }
 
+      const issues = [];
+      const aliases = parseAliases(settings.accountAliases);
+      applyTransfers(accounts, issues, aliases);
+
       for (const acc of accounts) {
         acc.calculated = acc.opening + acc.txs.reduce((a, t) => a + t.amount, 0);
         acc.diff = (acc.stated ?? 0) - acc.calculated;
@@ -338,6 +502,13 @@ TOTAL:5100`;
         cash.diff = (cash.stated ?? 0) - cash.calculated;
       }
 
+      const staffLetters = parseStaffLetters(settings.staffLetters);
+      for (const acc of accounts) {
+        for (const tx of acc.txs) {
+          for (const ch of tx.letters) if (!staffLetters.includes(ch)) staffLetters.push(ch);
+        }
+      }
+      staffCodes = staffLetters.map(ch => "Q" + ch);
       const staff = Object.fromEntries(staffCodes.map(c => [c, { in: 0, out: 0, inCount: 0, outCount: 0 }]));
       const allTx = [];
       let atmFromAccounts = 0;
@@ -345,7 +516,7 @@ TOTAL:5100`;
         for (const tx of acc.txs) {
           allTx.push({ account: acc.title, ...tx });
           if (tx.amount < 0 && /atm/i.test(tx.desc)) atmFromAccounts += Math.abs(tx.amount);
-          if (tx.letters.length) {
+          if (!tx.transferRef && !tx.synthetic && tx.letters.length) {
             const share = Math.abs(tx.amount) / tx.letters.length;
             for (const ch of tx.letters) {
               const key = "Q" + ch;
@@ -362,12 +533,11 @@ TOTAL:5100`;
         }
       }
 
-      const issues = [];
       for (const acc of accounts) {
         if (acc.stated == null) issues.push({ type: "warn", text: `${acc.title} 没有写 = 剩下金额` });
         else if (Math.abs(acc.diff) > 0.001) issues.push({ type: "bad", text: `${acc.title} 算错：自动 ${fmt(acc.calculated)}，你写 ${fmt(acc.stated)}，差额 ${fmt(acc.diff)}` });
         for (const tx of acc.txs) {
-          if (tx.amount > 0 && !tx.codeRaw) issues.push({ type: "warn", text: `${acc.title} 的进钱 ${fmt(tx.amount)} ${tx.desc} 没写员工代码` });
+          if (tx.amount > 0 && !tx.codeRaw && !tx.synthetic) issues.push({ type: "warn", text: `${acc.title} 的进钱 ${fmt(tx.amount)} ${tx.desc} 没写员工代码` });
         }
       }
       const accountTotal = accounts.reduce((a, x) => a + (x.stated ?? 0), 0);
@@ -478,11 +648,19 @@ TOTAL:5100`;
 
     document.getElementById("analyze").onclick = () => render(parse(document.getElementById("raw").value));
     document.getElementById("sample").onclick = () => { document.getElementById("raw").value = sampleText; render(parse(sampleText)); };
+    document.getElementById("saveSettings").onclick = saveSettings;
+    document.getElementById("resetSettings").onclick = () => {
+      settings = { ...defaultSettings };
+      localStorage.setItem("accountCheckerSettings", JSON.stringify(settings));
+      renderSettings();
+      render(parse(document.getElementById("raw").value));
+    };
     document.getElementById("copyReport").onclick = async () => {
       await navigator.clipboard.writeText(document.getElementById("report").value);
       alert("已复制");
     };
     ["fCode", "fAmount", "fText"].forEach(id => document.getElementById(id).addEventListener("input", renderSearch));
+    renderSettings();
     document.getElementById("raw").value = sampleText;
     render(parse(sampleText));
 
